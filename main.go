@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -363,6 +364,12 @@ func (m model) launchProject(project Project) tea.Cmd {
 
 		cmd = exec.Command("bash", "-c", cmdString)
 		cmd.Dir = project.Path
+
+		// THIS IS THE KEY FIX: Set process in its own process group
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setpgid: true, // Create new process group
+			Pgid:    0,    // Use PID as PGID (makes it group leader)
+		}
 	}
 
 	err := cmd.Start()
