@@ -390,7 +390,7 @@ func (m model) launchProject(project Project) tea.Cmd {
 }
 
 func (m model) openLocalhost() tea.Cmd {
-	url := "http://localhost:3000/notes"
+	url := "http://localhost:5002/notes"
 
 	// WSL2 - use cmd.exe to open default browser on Windows
 	cmd := exec.Command("cmd.exe", "/c", "start", url)
