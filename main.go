@@ -53,7 +53,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	configFile := filepath.Join(homeDir, ".project-launcher.json")
+	configFile := filepath.Join(homeDir, ".local/bin/project-launcher.json")
 
 	m := model{
 		projects:   loadProjects(configFile),
