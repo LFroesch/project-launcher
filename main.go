@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -18,9 +19,11 @@ import (
 )
 
 type Project struct {
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Command string `json:"command"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Command  string `json:"command"`
+	Link     string `json:"link"`
+	Category string `json:"category"`
 }
 
 type statusMsg struct {
@@ -34,17 +37,20 @@ func showStatus(msg string) tea.Cmd {
 }
 
 type model struct {
-	projects     []Project
-	table        table.Model
-	editMode     bool
-	editRow      int
-	editCol      int
-	textInput    textinput.Model
-	configFile   string
-	width        int
-	height       int
-	statusMsg    string
-	statusExpiry time.Time
+	projects       []Project
+	table          table.Model
+	editMode       bool
+	editRow        int
+	editCol        int
+	textInput      textinput.Model
+	configFile     string
+	width          int
+	height         int
+	statusMsg      string
+	statusExpiry   time.Time
+	scrollOffset   int   // For horizontal scrolling
+	maxCols        int   // Maximum visible columns
+	projectIndices []int // Maps display row to actual project index (-1 for headers)
 }
 
 func main() {
@@ -56,13 +62,15 @@ func main() {
 	configFile := filepath.Join(homeDir, ".local/bin/project-launcher.json")
 
 	m := model{
-		projects:   loadProjects(configFile),
-		configFile: configFile,
-		width:      100,
-		height:     24,
-		editMode:   false,
-		editRow:    -1,
-		editCol:    -1,
+		projects:     loadProjects(configFile),
+		configFile:   configFile,
+		width:        100,
+		height:       24,
+		editMode:     false,
+		editRow:      -1,
+		editCol:      -1,
+		scrollOffset: 0,
+		maxCols:      5, // Updated to 5 columns (Name, Path, Command, Link, Category)
 	}
 
 	// Initialize text input for editing
@@ -71,9 +79,9 @@ func main() {
 
 	// Initialize table like Portmon
 	columns := []table.Column{
-		{Title: "Name", Width: 25},
+		{Title: "Name", Width: 40},
 		{Title: "Path", Width: 40},
-		{Title: "Command", Width: 25},
+		{Title: "Command", Width: 40},
 	}
 
 	t := table.New(
@@ -122,9 +130,65 @@ func (m *model) saveProjects() {
 }
 
 func (m *model) updateTable() {
+	sortedProjects := m.getSortedProjects()
+
 	var rows []table.Row
-	for _, project := range m.projects {
-		rows = append(rows, table.Row{project.Name, project.Path, project.Command})
+	m.projectIndices = []int{} // Reset project indices mapping
+
+	var lastCategory string
+	projectIndex := 0
+
+	for _, project := range sortedProjects {
+		// Handle empty category display
+		displayCategory := project.Category
+		if displayCategory == "" {
+			displayCategory = "N/A"
+		}
+
+		// Add category header if this is a new category
+		if displayCategory != lastCategory {
+			// Create category header row
+			categoryHeader := fmt.Sprintf("📂 %s", displayCategory)
+
+			// Apply horizontal scrolling to header
+			visibleCols := len(m.table.Columns())
+			headerRow := make(table.Row, visibleCols)
+
+			startCol := m.scrollOffset
+
+			for i := 0; i < visibleCols; i++ {
+				colIndex := startCol + i
+				if colIndex == 0 { // Show category in first visible column
+					headerRow[i] = categoryHeader
+				} else {
+					headerRow[i] = ""
+				}
+			}
+
+			rows = append(rows, headerRow)
+			m.projectIndices = append(m.projectIndices, -1) // -1 indicates header row
+			lastCategory = displayCategory
+		}
+
+		// Create project row
+		fullRow := []string{project.Name, project.Path, project.Command, project.Link, displayCategory}
+
+		// Apply horizontal scrolling to show only visible columns
+		visibleCols := len(m.table.Columns())
+		startCol := m.scrollOffset
+		endCol := startCol + visibleCols
+		if endCol > len(fullRow) {
+			endCol = len(fullRow)
+		}
+
+		var visibleRow table.Row
+		for i := startCol; i < endCol && i < len(fullRow); i++ {
+			visibleRow = append(visibleRow, fullRow[i])
+		}
+
+		rows = append(rows, visibleRow)
+		m.projectIndices = append(m.projectIndices, projectIndex)
+		projectIndex++
 	}
 	m.table.SetRows(rows)
 }
@@ -135,23 +199,73 @@ func (m *model) adjustLayout() {
 		tableHeight = 5
 	}
 
-	// Smart column sizing
+	// Calculate available width for columns
 	availableWidth := m.width - 6 // Account for borders
-	nameWidth := 25
-	cmdWidth := 25
-	pathWidth := availableWidth - nameWidth - cmdWidth
-	if pathWidth < 30 {
-		pathWidth = 30
+
+	// Define all possible columns
+	allColumns := []table.Column{
+		{Title: "Name", Width: 30},
+		{Title: "Path", Width: 35},
+		{Title: "Command", Width: 35},
+		{Title: "Link", Width: 30},
+		{Title: "Category", Width: 15},
 	}
 
-	columns := []table.Column{
-		{Title: "Name", Width: nameWidth},
-		{Title: "Path", Width: pathWidth},
-		{Title: "Command", Width: cmdWidth},
+	// Calculate how many columns can fit
+	totalWidth := 0
+	visibleCols := 0
+	for i, col := range allColumns {
+		if totalWidth+col.Width <= availableWidth {
+			totalWidth += col.Width
+			visibleCols++
+		} else {
+			break
+		}
+		if i >= len(allColumns)-1 {
+			break
+		}
 	}
 
-	m.table.SetColumns(columns)
+	// Ensure we show at least one column
+	if visibleCols == 0 {
+		visibleCols = 1
+		// Adjust the width of the first column to fit
+		allColumns[0].Width = availableWidth
+	}
+
+	// Apply horizontal scrolling offset
+	startCol := m.scrollOffset
+	endCol := startCol + visibleCols
+	if endCol > len(allColumns) {
+		endCol = len(allColumns)
+		startCol = endCol - visibleCols
+		if startCol < 0 {
+			startCol = 0
+		}
+		m.scrollOffset = startCol
+	}
+
+	// Select visible columns
+	var visibleColumns []table.Column
+	for i := startCol; i < endCol && i < len(allColumns); i++ {
+		visibleColumns = append(visibleColumns, allColumns[i])
+	}
+
+	// If we have extra space, distribute it among visible columns
+	if len(visibleColumns) > 0 {
+		usedWidth := 0
+		for _, col := range visibleColumns {
+			usedWidth += col.Width
+		}
+		if extraWidth := availableWidth - usedWidth; extraWidth > 0 {
+			// Distribute extra width to the last column (usually Command or Path)
+			visibleColumns[len(visibleColumns)-1].Width += extraWidth
+		}
+	}
+
+	m.table.SetColumns(visibleColumns)
 	m.table.SetHeight(tableHeight)
+	m.maxCols = len(allColumns)
 }
 
 func (m *model) startEdit() {
@@ -160,19 +274,30 @@ func (m *model) startEdit() {
 	}
 
 	m.editMode = true
-	m.editRow = m.table.Cursor()
+	displayIndex := m.table.Cursor()
+	m.editRow = m.getOriginalIndexByDisplayIndex(displayIndex)
+	if m.editRow == -1 {
+		return // Invalid index
+	}
 	m.editCol = 0 // Start with name column
 
 	// Set the current value in the text input
 	project := m.projects[m.editRow]
+	var initialValue string
 	switch m.editCol {
 	case 0:
-		m.textInput.SetValue(project.Name)
+		initialValue = project.Name
 	case 1:
-		m.textInput.SetValue(project.Path)
+		initialValue = project.Path
 	case 2:
-		m.textInput.SetValue(project.Command)
+		initialValue = project.Command
+	case 3:
+		initialValue = project.Link
+	case 4:
+		initialValue = project.Category
 	}
+	m.textInput.SetValue(initialValue)
+	m.textInput.SetCursor(len(initialValue)) // Move cursor to end
 	m.textInput.Focus()
 }
 
@@ -189,6 +314,10 @@ func (m *model) saveEdit() {
 		m.projects[m.editRow].Path = value
 	case 2:
 		m.projects[m.editRow].Command = value
+	case 3:
+		m.projects[m.editRow].Link = value
+	case 4:
+		m.projects[m.editRow].Category = value
 	}
 
 	m.saveProjects()
@@ -250,30 +379,44 @@ func (m model) updateEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		// Save current field and move to next
 		m.saveEdit()
-		m.editCol = (m.editCol + 1) % 3
+		m.editCol = (m.editCol + 1) % 5
 		project := m.projects[m.editRow]
+		var newValue string
 		switch m.editCol {
 		case 0:
-			m.textInput.SetValue(project.Name)
+			newValue = project.Name
 		case 1:
-			m.textInput.SetValue(project.Path)
+			newValue = project.Path
 		case 2:
-			m.textInput.SetValue(project.Command)
+			newValue = project.Command
+		case 3:
+			newValue = project.Link
+		case 4:
+			newValue = project.Category
 		}
+		m.textInput.SetValue(newValue)
+		m.textInput.SetCursor(len(newValue)) // Move cursor to end
 		return m, nil
 	case "shift+tab":
 		// Save current field and move to previous
 		m.saveEdit()
-		m.editCol = (m.editCol - 1 + 3) % 3
+		m.editCol = (m.editCol - 1 + 5) % 5
 		project := m.projects[m.editRow]
+		var newValue string
 		switch m.editCol {
 		case 0:
-			m.textInput.SetValue(project.Name)
+			newValue = project.Name
 		case 1:
-			m.textInput.SetValue(project.Path)
+			newValue = project.Path
 		case 2:
-			m.textInput.SetValue(project.Command)
+			newValue = project.Command
+		case 3:
+			newValue = project.Link
+		case 4:
+			newValue = project.Category
 		}
+		m.textInput.SetValue(newValue)
+		m.textInput.SetCursor(len(newValue)) // Move cursor to end
 		return m, nil
 	}
 
@@ -292,9 +435,11 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n", "a":
 		// Add new project
 		m.projects = append(m.projects, Project{
-			Name:    "New Project",
-			Path:    "/path/to/project",
-			Command: "command",
+			Name:     "New Project",
+			Path:     "/path/to/project",
+			Command:  "command",
+			Link:     "",
+			Category: "", // Empty category will display as "N/A"
 		})
 		m.updateTable()
 		m.saveProjects()
@@ -304,9 +449,13 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, showStatus("➕ New project added")
 	case "d", "delete":
 		if len(m.projects) > 0 {
-			idx := m.table.Cursor()
-			projectName := m.projects[idx].Name
-			m.projects = append(m.projects[:idx], m.projects[idx+1:]...)
+			displayIndex := m.table.Cursor()
+			originalIndex := m.getOriginalIndexByDisplayIndex(displayIndex)
+			if originalIndex == -1 {
+				return m, nil
+			}
+			projectName := m.projects[originalIndex].Name
+			m.projects = append(m.projects[:originalIndex], m.projects[originalIndex+1:]...)
 			m.saveProjects()
 			m.updateTable()
 			return m, showStatus(fmt.Sprintf("🗑️ Deleted %s", projectName))
@@ -314,8 +463,11 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case " ", "enter":
 		if len(m.projects) > 0 {
-			project := m.projects[m.table.Cursor()]
-			return m, m.launchProject(project)
+			displayIndex := m.table.Cursor()
+			project := m.getProjectByDisplayIndex(displayIndex)
+			if project != nil {
+				return m, m.launchProject(*project)
+			}
 		}
 		return m, nil
 	case "r":
@@ -323,7 +475,34 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateTable()
 		return m, showStatus("🔄 Refreshed")
 	case "o":
-		return m, m.openLocalhost()
+		if len(m.projects) > 0 {
+			displayIndex := m.table.Cursor()
+			project := m.getProjectByDisplayIndex(displayIndex)
+			if project != nil {
+				return m, m.openProjectLink(*project)
+			}
+		}
+		return m, nil
+	case "left":
+		// Horizontal scroll left
+		if m.scrollOffset > 0 {
+			m.scrollOffset--
+			m.adjustLayout()
+			m.updateTable()
+		}
+		return m, nil
+	case "right":
+		// Horizontal scroll right
+		maxOffset := m.maxCols - len(m.table.Columns())
+		if maxOffset < 0 {
+			maxOffset = 0
+		}
+		if m.scrollOffset < maxOffset {
+			m.scrollOffset++
+			m.adjustLayout()
+			m.updateTable()
+		}
+		return m, nil
 	default:
 		// Let table handle arrow keys and other navigation
 		var cmd tea.Cmd
@@ -389,23 +568,112 @@ func (m model) launchProject(project Project) tea.Cmd {
 	}
 }
 
-func (m model) openLocalhost() tea.Cmd {
-	url := "http://localhost:5002/notes"
+func (m model) openProjectLink(project Project) tea.Cmd {
+	if project.Link == "" {
+		return showStatus("📭 No Link Associated")
+	}
 
 	// WSL2 - use cmd.exe to open default browser on Windows
-	cmd := exec.Command("cmd.exe", "/c", "start", url)
+	cmd := exec.Command("cmd.exe", "/c", "start", project.Link)
 	err := cmd.Start()
 
 	if err != nil {
-		return showStatus(fmt.Sprintf("❌ Failed to open browser: %v", err))
+		return showStatus(fmt.Sprintf("❌ Failed to open link: %v", err))
 	}
 
-	return showStatus("🌐 Opened in Windows browser")
+	return showStatus(fmt.Sprintf("🌐 Opened %s link in browser", project.Name))
+}
+
+func (m *model) getSortedProjects() []Project {
+	// Create a copy of projects for sorting without modifying the original order
+	sortedProjects := make([]Project, len(m.projects))
+	copy(sortedProjects, m.projects)
+
+	// Sort projects by category first, then by name within each category (case-insensitive)
+	sort.Slice(sortedProjects, func(i, j int) bool {
+		// Handle empty categories by treating them as "N/A"
+		categoryI := sortedProjects[i].Category
+		if categoryI == "" {
+			categoryI = "N/A"
+		}
+		categoryJ := sortedProjects[j].Category
+		if categoryJ == "" {
+			categoryJ = "N/A"
+		}
+
+		// First sort by category
+		if !strings.EqualFold(categoryI, categoryJ) {
+			return strings.ToLower(categoryI) < strings.ToLower(categoryJ)
+		}
+
+		// If categories are the same, sort by name
+		return strings.ToLower(sortedProjects[i].Name) < strings.ToLower(sortedProjects[j].Name)
+	})
+
+	return sortedProjects
+}
+
+func (m *model) getProjectByDisplayIndex(displayIndex int) *Project {
+	// Check if the display index is valid and not a header row
+	if displayIndex < 0 || displayIndex >= len(m.projectIndices) {
+		return nil
+	}
+
+	// Get the actual project index (-1 means header row)
+	projectIndex := m.projectIndices[displayIndex]
+	if projectIndex == -1 {
+		return nil // This is a header row, no project associated
+	}
+
+	sortedProjects := m.getSortedProjects()
+	if projectIndex >= len(sortedProjects) {
+		return nil
+	}
+
+	// Find the original project in m.projects that matches the sorted project
+	sortedProject := sortedProjects[projectIndex]
+	for i := range m.projects {
+		if m.projects[i].Name == sortedProject.Name &&
+			m.projects[i].Path == sortedProject.Path &&
+			m.projects[i].Command == sortedProject.Command {
+			return &m.projects[i]
+		}
+	}
+	return nil
+}
+
+func (m *model) getOriginalIndexByDisplayIndex(displayIndex int) int {
+	// Check if the display index is valid and not a header row
+	if displayIndex < 0 || displayIndex >= len(m.projectIndices) {
+		return -1
+	}
+
+	// Get the actual project index (-1 means header row)
+	projectIndex := m.projectIndices[displayIndex]
+	if projectIndex == -1 {
+		return -1 // This is a header row, no project associated
+	}
+
+	sortedProjects := m.getSortedProjects()
+	if projectIndex >= len(sortedProjects) {
+		return -1
+	}
+
+	// Find the original index in m.projects that matches the sorted project
+	sortedProject := sortedProjects[projectIndex]
+	for i := range m.projects {
+		if m.projects[i].Name == sortedProject.Name &&
+			m.projects[i].Path == sortedProject.Path &&
+			m.projects[i].Command == sortedProject.Command {
+			return i
+		}
+	}
+	return -1
 }
 
 func (m model) View() string {
 	header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86")).
-		Render("🚀 Project Launcher | [ o - to open Project Manager frontend ] ")
+		Render("🚀 Project Launcher")
 
 	if len(m.projects) == 0 {
 		content := "\nNo projects configured yet.\n\nPress 'n' to add your first project!"
@@ -427,10 +695,54 @@ func (m model) View() string {
 	// Show different footer based on mode
 	var footer string
 	if m.editMode {
-		colName := []string{"Name", "Path", "Command"}[m.editCol]
-		footer = fmt.Sprintf("Editing %s: %s | tab: next field • enter: save • esc: cancel", colName, m.textInput.View())
+		colName := []string{"Name", "Path", "Command", "Link", "Category"}[m.editCol]
+		// Color the keys in edit mode
+		keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // Blue color for keys
+		footer = fmt.Sprintf("Editing %s: %s | %s: next field • %s: save • %s: cancel",
+			colName,
+			m.textInput.View(),
+			keyStyle.Render("tab"),
+			keyStyle.Render("enter"),
+			keyStyle.Render("esc"))
 	} else {
-		footer = fmt.Sprintf("↑↓: navigate • space/enter: launch • e: edit • n/a: add • d/delete: delete • r: refresh • q: quit\n%s", statusMessage)
+		// Color styles
+		keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("39"))     // Blue color for keys
+		actionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("86"))  // Green color for action text
+		bulletStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240")) // Gray color for bullets
+
+		scrollHint := ""
+		if m.maxCols > len(m.table.Columns()) {
+			scrollHint = " " + bulletStyle.Render("•") + " " + keyStyle.Render("←→") + ": " + actionStyle.Render("scroll columns")
+		}
+
+		footer = fmt.Sprintf("%s: %s%s %s %s/%s: %s %s %s: %s\n%s/%s: %s %s %s/%s: %s %s %s: %s %s %s: %s %s %s: %s\n%s",
+			keyStyle.Render("↑↓"),
+			actionStyle.Render("navigate"),
+			scrollHint,
+			bulletStyle.Render("•"),
+			keyStyle.Render("space"),
+			keyStyle.Render("enter"),
+			actionStyle.Render("launch"),
+			bulletStyle.Render("•"),
+			keyStyle.Render("e"),
+			actionStyle.Render("edit"),
+			keyStyle.Render("n"),
+			keyStyle.Render("a"),
+			actionStyle.Render("add"),
+			bulletStyle.Render("•"),
+			keyStyle.Render("d"),
+			keyStyle.Render("delete"),
+			actionStyle.Render("delete"),
+			bulletStyle.Render("•"),
+			keyStyle.Render("r"),
+			actionStyle.Render("refresh"),
+			bulletStyle.Render("•"),
+			keyStyle.Render("o"),
+			actionStyle.Render("open link"),
+			bulletStyle.Render("•"),
+			keyStyle.Render("q"),
+			actionStyle.Render("quit"),
+			statusMessage)
 	}
 
 	// If editing, overlay the input on the table
