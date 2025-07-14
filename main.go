@@ -79,9 +79,10 @@ func main() {
 
 	// Initialize table like Portmon
 	columns := []table.Column{
-		{Title: "Name", Width: 40},
+		{Title: "Name", Width: 30},
 		{Title: "Path", Width: 40},
-		{Title: "Command", Width: 40},
+		{Title: "Command", Width: 30},
+		{Title: "Category", Width: 15},
 	}
 
 	t := table.New(
@@ -171,7 +172,7 @@ func (m *model) updateTable() {
 		}
 
 		// Create project row
-		fullRow := []string{project.Name, project.Path, project.Command, project.Link, displayCategory}
+		fullRow := []string{project.Name, project.Path, project.Command, displayCategory, project.Link}
 
 		// Apply horizontal scrolling to show only visible columns
 		visibleCols := len(m.table.Columns())
@@ -207,8 +208,8 @@ func (m *model) adjustLayout() {
 		{Title: "Name", Width: 30},
 		{Title: "Path", Width: 35},
 		{Title: "Command", Width: 35},
-		{Title: "Link", Width: 30},
 		{Title: "Category", Width: 15},
+		{Title: "Link", Width: 30},
 	}
 
 	// Calculate how many columns can fit
