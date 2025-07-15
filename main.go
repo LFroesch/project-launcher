@@ -515,9 +515,6 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) launchProject(project Project) tea.Cmd {
-	logFile := fmt.Sprintf("%s.log", strings.ReplaceAll(project.Name, " ", "_"))
-	logPath := filepath.Join(project.Path, logFile)
-
 	// Check if this is a Windows path (starts with /mnt/c/)
 	isWindowsPath := strings.HasPrefix(project.Path, "/mnt/c/")
 
@@ -539,8 +536,7 @@ func (m model) launchProject(project Project) tea.Cmd {
 		}
 	} else {
 		// For Linux/WSL apps, use bash
-		cmdString := fmt.Sprintf(`cd '%s' && echo "Starting %s at $(date)" >> '%s' && %s >> '%s' 2>&1`,
-			project.Path, project.Name, logPath, project.Command, logPath)
+		cmdString := fmt.Sprintf(`cd '%s' && %s`, project.Path, project.Command)
 
 		cmd = exec.Command("bash", "-c", cmdString)
 		cmd.Dir = project.Path
@@ -565,7 +561,7 @@ func (m model) launchProject(project Project) tea.Cmd {
 		}
 		return showStatus(fmt.Sprintf("🚀 Launched %s (Windows via %s)", project.Name, method))
 	} else {
-		return showStatus(fmt.Sprintf("🚀 Launched %s → Log: %s", project.Name, logPath))
+		return showStatus(fmt.Sprintf("🚀 Launched %s", project.Name))
 	}
 }
 
