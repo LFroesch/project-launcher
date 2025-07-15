@@ -52,6 +52,8 @@ type model struct {
 	maxCols        int            // Maximum visible columns
 	projectIndices []int          // Maps display row to actual project index (-1 for headers)
 	allColumns     []table.Column // Store all possible columns
+	confirmDelete  bool           // Confirmation mode for deletion
+	deleteIndex    int            // Index of project to delete
 }
 
 func main() {
@@ -63,15 +65,17 @@ func main() {
 	configFile := filepath.Join(homeDir, ".local/bin/project-launcher.json")
 
 	m := model{
-		projects:     loadProjects(configFile),
-		configFile:   configFile,
-		width:        100,
-		height:       24,
-		editMode:     false,
-		editRow:      -1,
-		editCol:      -1,
-		scrollOffset: 0,
-		maxCols:      5, // Updated to 5 columns (Name, Path, Command, Link, Category)
+		projects:      loadProjects(configFile),
+		configFile:    configFile,
+		width:         100,
+		height:        24,
+		editMode:      false,
+		editRow:       -1,
+		editCol:       -1,
+		scrollOffset:  0,
+		maxCols:       5, // Updated to 5 columns (Name, Path, Command, Link, Category)
+		confirmDelete: false,
+		deleteIndex:   -1,
 	}
 
 	// Define all possible columns
@@ -362,6 +366,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.editMode {
 			return m.updateEdit(msg)
 		}
+		if m.confirmDelete {
+			return m.updateDeleteConfirm(msg)
+		}
 		return m.updateNormal(msg)
 	}
 
@@ -371,6 +378,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	return m, nil
+}
+
+func (m model) updateDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		// Confirm deletion
+		if m.deleteIndex >= 0 && m.deleteIndex < len(m.projects) {
+			projectName := m.projects[m.deleteIndex].Name
+			m.projects = append(m.projects[:m.deleteIndex], m.projects[m.deleteIndex+1:]...)
+			m.saveProjects()
+			m.updateTable()
+			m.confirmDelete = false
+			m.deleteIndex = -1
+			return m, showStatus(fmt.Sprintf("🗑️ Deleted %s", projectName))
+		}
+		m.confirmDelete = false
+		m.deleteIndex = -1
+		return m, nil
+	case "n", "N", "esc":
+		// Cancel deletion
+		m.confirmDelete = false
+		m.deleteIndex = -1
+		return m, showStatus("❌ Deletion cancelled")
+	}
 	return m, nil
 }
 
@@ -441,18 +473,22 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "n", "a":
 		// Add new project
-		m.projects = append(m.projects, Project{
+		newProject := Project{
 			Name:     "New Project",
 			Path:     "/path/to/project",
 			Command:  "command",
 			Link:     "",
 			Category: "", // Empty category will display as "N/A"
-		})
+		}
+		m.projects = append(m.projects, newProject)
 		m.saveProjects()
 		m.updateTable()
-		// Start editing the new project
-		m.table.SetCursor(len(m.projects) - 1)
-		m.startEdit()
+		// Find the display index of the newly added project
+		displayIndex := m.findProjectDisplayIndex(newProject)
+		if displayIndex != -1 {
+			m.table.SetCursor(displayIndex)
+			m.startEdit()
+		}
 		return m, showStatus("➕ New project added")
 	case "d", "delete":
 		if len(m.projects) > 0 {
@@ -461,11 +497,9 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if originalIndex == -1 {
 				return m, nil
 			}
-			projectName := m.projects[originalIndex].Name
-			m.projects = append(m.projects[:originalIndex], m.projects[originalIndex+1:]...)
-			m.saveProjects()
-			m.updateTable()
-			return m, showStatus(fmt.Sprintf("🗑️ Deleted %s", projectName))
+			m.confirmDelete = true
+			m.deleteIndex = originalIndex
+			return m, showStatus(fmt.Sprintf("❓ Delete '%s'? (y/n)", m.projects[originalIndex].Name))
 		}
 		return m, nil
 	case " ", "enter":
@@ -643,6 +677,28 @@ func (m *model) getProjectByDisplayIndex(displayIndex int) *Project {
 		}
 	}
 	return nil
+}
+
+func (m *model) findProjectDisplayIndex(targetProject Project) int {
+	// Find the display index of a project in the table
+	for i, projectIndex := range m.projectIndices {
+		if projectIndex == -1 {
+			continue // Skip header rows
+		}
+		
+		sortedProjects := m.getSortedProjects()
+		if projectIndex < len(sortedProjects) {
+			project := sortedProjects[projectIndex]
+			if project.Name == targetProject.Name &&
+				project.Path == targetProject.Path &&
+				project.Command == targetProject.Command &&
+				project.Link == targetProject.Link &&
+				project.Category == targetProject.Category {
+				return i
+			}
+		}
+	}
+	return -1
 }
 
 func (m *model) getOriginalIndexByDisplayIndex(displayIndex int) int {
