@@ -61,8 +61,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	configFile := filepath.Join(homeDir, ".local/bin/project-launcher.json")
+	configFile := filepath.Join(homeDir, ".config", "project-launcher", "config.json")
 
 	m := model{
 		projects:      loadProjects(configFile),
@@ -685,7 +684,7 @@ func (m *model) findProjectDisplayIndex(targetProject Project) int {
 		if projectIndex == -1 {
 			continue // Skip header rows
 		}
-		
+
 		sortedProjects := m.getSortedProjects()
 		if projectIndex < len(sortedProjects) {
 			project := sortedProjects[projectIndex]
