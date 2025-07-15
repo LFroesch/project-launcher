@@ -48,9 +48,10 @@ type model struct {
 	height         int
 	statusMsg      string
 	statusExpiry   time.Time
-	scrollOffset   int   // For horizontal scrolling
-	maxCols        int   // Maximum visible columns
-	projectIndices []int // Maps display row to actual project index (-1 for headers)
+	scrollOffset   int            // For horizontal scrolling
+	maxCols        int            // Maximum visible columns
+	projectIndices []int          // Maps display row to actual project index (-1 for headers)
+	allColumns     []table.Column // Store all possible columns
 }
 
 func main() {
@@ -73,20 +74,22 @@ func main() {
 		maxCols:      5, // Updated to 5 columns (Name, Path, Command, Link, Category)
 	}
 
+	// Define all possible columns
+	m.allColumns = []table.Column{
+		{Title: "Name", Width: 30},
+		{Title: "Path", Width: 35},
+		{Title: "Command", Width: 35},
+		{Title: "Category", Width: 15},
+		{Title: "Link", Width: 30},
+	}
+
 	// Initialize text input for editing
 	m.textInput = textinput.New()
 	m.textInput.CharLimit = 200
 
-	// Initialize table like Portmon
-	columns := []table.Column{
-		{Title: "Name", Width: 30},
-		{Title: "Path", Width: 40},
-		{Title: "Command", Width: 30},
-		{Title: "Category", Width: 15},
-	}
-
+	// Initialize table with initial columns
 	t := table.New(
-		table.WithColumns(columns),
+		table.WithColumns(m.allColumns[:4]), // Start with first 4 columns
 		table.WithFocused(true),
 		table.WithHeight(10),
 	)
@@ -104,6 +107,7 @@ func main() {
 	t.SetStyles(s)
 
 	m.table = t
+	m.adjustLayout()
 	m.updateTable()
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
@@ -132,6 +136,7 @@ func (m *model) saveProjects() {
 
 func (m *model) updateTable() {
 	sortedProjects := m.getSortedProjects()
+	visibleColumns := m.table.Columns()
 
 	var rows []table.Row
 	m.projectIndices = []int{} // Reset project indices mapping
@@ -151,19 +156,11 @@ func (m *model) updateTable() {
 			// Create category header row
 			categoryHeader := fmt.Sprintf("📂 %s", displayCategory)
 
-			// Apply horizontal scrolling to header
-			visibleCols := len(m.table.Columns())
-			headerRow := make(table.Row, visibleCols)
-
-			startCol := m.scrollOffset
-
-			for i := 0; i < visibleCols; i++ {
-				colIndex := startCol + i
-				if colIndex == 0 { // Show category in first visible column
-					headerRow[i] = categoryHeader
-				} else {
-					headerRow[i] = ""
-				}
+			// Create header row with same number of columns as visible columns
+			headerRow := make(table.Row, len(visibleColumns))
+			headerRow[0] = categoryHeader // Show category in first column
+			for i := 1; i < len(headerRow); i++ {
+				headerRow[i] = ""
 			}
 
 			rows = append(rows, headerRow)
@@ -171,20 +168,18 @@ func (m *model) updateTable() {
 			lastCategory = displayCategory
 		}
 
-		// Create project row
-		fullRow := []string{project.Name, project.Path, project.Command, displayCategory, project.Link}
+		// Create project row - build full row data first
+		fullRowData := []string{project.Name, project.Path, project.Command, displayCategory, project.Link}
 
-		// Apply horizontal scrolling to show only visible columns
-		visibleCols := len(m.table.Columns())
-		startCol := m.scrollOffset
-		endCol := startCol + visibleCols
-		if endCol > len(fullRow) {
-			endCol = len(fullRow)
-		}
-
-		var visibleRow table.Row
-		for i := startCol; i < endCol && i < len(fullRow); i++ {
-			visibleRow = append(visibleRow, fullRow[i])
+		// Create visible row based on current visible columns and scroll offset
+		visibleRow := make(table.Row, len(visibleColumns))
+		for i, col := range visibleColumns {
+			columnIndex := m.getColumnIndex(col.Title)
+			if columnIndex >= 0 && columnIndex < len(fullRowData) {
+				visibleRow[i] = fullRowData[columnIndex]
+			} else {
+				visibleRow[i] = ""
+			}
 		}
 
 		rows = append(rows, visibleRow)
@@ -192,6 +187,23 @@ func (m *model) updateTable() {
 		projectIndex++
 	}
 	m.table.SetRows(rows)
+}
+
+func (m *model) getColumnIndex(title string) int {
+	switch title {
+	case "Name":
+		return 0
+	case "Path":
+		return 1
+	case "Command":
+		return 2
+	case "Category":
+		return 3
+	case "Link":
+		return 4
+	default:
+		return -1
+	}
 }
 
 func (m *model) adjustLayout() {
@@ -203,26 +215,17 @@ func (m *model) adjustLayout() {
 	// Calculate available width for columns
 	availableWidth := m.width - 6 // Account for borders
 
-	// Define all possible columns
-	allColumns := []table.Column{
-		{Title: "Name", Width: 30},
-		{Title: "Path", Width: 35},
-		{Title: "Command", Width: 35},
-		{Title: "Category", Width: 15},
-		{Title: "Link", Width: 30},
-	}
-
 	// Calculate how many columns can fit
 	totalWidth := 0
 	visibleCols := 0
-	for i, col := range allColumns {
+	for i, col := range m.allColumns {
 		if totalWidth+col.Width <= availableWidth {
 			totalWidth += col.Width
 			visibleCols++
 		} else {
 			break
 		}
-		if i >= len(allColumns)-1 {
+		if i >= len(m.allColumns)-1 {
 			break
 		}
 	}
@@ -230,15 +233,17 @@ func (m *model) adjustLayout() {
 	// Ensure we show at least one column
 	if visibleCols == 0 {
 		visibleCols = 1
-		// Adjust the width of the first column to fit
-		allColumns[0].Width = availableWidth
+		// Create a copy of the first column and adjust width
+		firstCol := m.allColumns[0]
+		firstCol.Width = availableWidth
+		m.allColumns[0] = firstCol
 	}
 
 	// Apply horizontal scrolling offset
 	startCol := m.scrollOffset
 	endCol := startCol + visibleCols
-	if endCol > len(allColumns) {
-		endCol = len(allColumns)
+	if endCol > len(m.allColumns) {
+		endCol = len(m.allColumns)
 		startCol = endCol - visibleCols
 		if startCol < 0 {
 			startCol = 0
@@ -248,8 +253,8 @@ func (m *model) adjustLayout() {
 
 	// Select visible columns
 	var visibleColumns []table.Column
-	for i := startCol; i < endCol && i < len(allColumns); i++ {
-		visibleColumns = append(visibleColumns, allColumns[i])
+	for i := startCol; i < endCol && i < len(m.allColumns); i++ {
+		visibleColumns = append(visibleColumns, m.allColumns[i])
 	}
 
 	// If we have extra space, distribute it among visible columns
@@ -259,14 +264,14 @@ func (m *model) adjustLayout() {
 			usedWidth += col.Width
 		}
 		if extraWidth := availableWidth - usedWidth; extraWidth > 0 {
-			// Distribute extra width to the last column (usually Command or Path)
+			// Distribute extra width to the last column
 			visibleColumns[len(visibleColumns)-1].Width += extraWidth
 		}
 	}
 
 	m.table.SetColumns(visibleColumns)
 	m.table.SetHeight(tableHeight)
-	m.maxCols = len(allColumns)
+	m.maxCols = len(m.allColumns)
 }
 
 func (m *model) startEdit() {
@@ -350,6 +355,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.adjustLayout()
+		m.updateTable()
 		return m, nil
 
 	case tea.KeyMsg:
@@ -442,8 +448,8 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			Link:     "",
 			Category: "", // Empty category will display as "N/A"
 		})
-		m.updateTable()
 		m.saveProjects()
+		m.updateTable()
 		// Start editing the new project
 		m.table.SetCursor(len(m.projects) - 1)
 		m.startEdit()
