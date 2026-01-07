@@ -14,28 +14,13 @@ A sleek project launcher and manager built with Go that provides an interactive 
 
 ## Installation
 
-### Prerequisites
-
-- Go 1.23.3 or later
-- Linux/Unix system or WSL2 on Windows
-
-### Build and Install
-
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd project-launcher
+go install github.com/LFroesch/project-launcher@latest
+```
 
-# Build the binary
-go build -o project-launcher
-
-# Install to local bin for global access
-mkdir -p ~/.local/bin
-cp project-launcher ~/.local/bin/
-
-# Make sure ~/.local/bin is in your PATH
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
+Make sure `$GOPATH/bin` (usually `~/go/bin`) is in your PATH:
+```bash
+export PATH="$HOME/go/bin:$PATH"
 ```
 
 ### Verify Installation

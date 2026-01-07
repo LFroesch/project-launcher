@@ -1,4 +1,4 @@
-module project-launcher
+module github.com/LFroesch/project-launcher
 
 go 1.23.3
 
