@@ -171,15 +171,20 @@ func (m *model) updateTable() {
 			lastCategory = displayCategory
 		}
 
-		// Create project row - build full row data first
-		fullRowData := []string{project.Name, project.Path, project.Command, displayCategory, project.Link}
+		// Create project row - build full data map first
+		fullRowData := map[string]string{
+			"Name":     project.Name,
+			"Path":     project.Path,
+			"Command":  project.Command,
+			"Category": displayCategory,
+			"Link":     project.Link,
+		}
 
-		// Create visible row based on current visible columns and scroll offset
+		// Create visible row based on current visible columns
 		visibleRow := make(table.Row, len(visibleColumns))
 		for i, col := range visibleColumns {
-			columnIndex := m.getColumnIndex(col.Title)
-			if columnIndex >= 0 && columnIndex < len(fullRowData) {
-				visibleRow[i] = fullRowData[columnIndex]
+			if value, exists := fullRowData[col.Title]; exists {
+				visibleRow[i] = value
 			} else {
 				visibleRow[i] = ""
 			}
@@ -190,23 +195,6 @@ func (m *model) updateTable() {
 		projectIndex++
 	}
 	m.table.SetRows(rows)
-}
-
-func (m *model) getColumnIndex(title string) int {
-	switch title {
-	case "Name":
-		return 0
-	case "Path":
-		return 1
-	case "Command":
-		return 2
-	case "Category":
-		return 3
-	case "Link":
-		return 4
-	default:
-		return -1
-	}
 }
 
 func (m *model) adjustLayout() {
