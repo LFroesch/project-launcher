@@ -190,9 +190,9 @@ func (m *model) updateTable() {
 			}
 		}
 
-		rows = append(rows, visibleRow)
-		m.projectIndices = append(m.projectIndices, projectIndex)
-		projectIndex++
+	rows = append(rows, visibleRow)
+	m.projectIndices = append(m.projectIndices, projectIndex)
+	projectIndex++
 	}
 	m.table.SetRows(rows)
 }
